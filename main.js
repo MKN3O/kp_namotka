@@ -313,11 +313,11 @@ function computeGeodesicPath() {
 }
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
-function forwardWorld(i, offset) {  // функции превращают координаты из координат на поверхности
+function forwardWorld(i) {  // функции превращают координаты из координат на поверхности
                                     // вращения в мировые координаты
   const pt = pathPoints[i];
   const theta = pt.theta;
-  return [pt.r * Math.cos(theta), pt.r * Math.sin(theta), pt.z];
+  return [pt.r * Math.cos(theta), pt.r * Math.sin(theta), pt.z, pt.takt];
 }
 
 
@@ -365,9 +365,9 @@ function updateTapeAndEdges(points) {
 
   for (let i = 0; i < points.length; i++) {
     const P = points[i];
+    const offset = -P[3] * 0.001;
     const normal = normalFromWorld(P[0], P[1], P[2]);
     const nx = normal[0], ny = normal[1], nz = normal[2];
-
     let tx, ty, tz;
     if (i < points.length - 1) {
       const next = points[i+1];
@@ -400,9 +400,9 @@ function updateTapeAndEdges(points) {
     const rightX = P[0] + halfW * bnx;
     const rightY = P[1] + halfW * bny;
     const rightZ = P[2] + halfW * bnz;
-    verts.push(leftX, leftY, leftZ, rightX, rightY, rightZ);
-    leftLine.push(leftX, leftY, leftZ);
-    rightLine.push(rightX, rightY, rightZ);
+    verts.push(leftX, leftY, leftZ, offset, rightX, rightY, rightZ, offset);
+    leftLine.push(leftX, leftY, leftZ, offset);
+    rightLine.push(rightX, rightY, rightZ, offset);
   }
 
   // Обновление полосы
@@ -445,9 +445,11 @@ function setupTapeBuffer() {
 
   tapeVBO = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, tapeVBO);
-  gl.bufferData(gl.ARRAY_BUFFER, MAX_TRACE_POINTS * 2 * 3 * 4, gl.DYNAMIC_DRAW);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bufferData(gl.ARRAY_BUFFER, MAX_TRACE_POINTS * 2 * 4 * 4, gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 4 * 4, 0);
+  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 4 * 4, 3 * 4); // атрибут смещения по Z
   gl.enableVertexAttribArray(0);
+  gl.enableVertexAttribArray(1);
   gl.bindVertexArray(null);
 }
 
@@ -457,9 +459,11 @@ function setupEdgeBuffers() {
   gl.bindVertexArray(leftEdgeVAO);
   leftEdgeVBO = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, leftEdgeVBO);
-  gl.bufferData(gl.ARRAY_BUFFER, MAX_TRACE_POINTS * 3 * 4, gl.DYNAMIC_DRAW);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bufferData(gl.ARRAY_BUFFER, MAX_TRACE_POINTS * 4 * 4, gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 4*4, 0);
+  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 4*4, 3*4);
   gl.enableVertexAttribArray(0);
+  gl.enableVertexAttribArray(1);
   gl.bindVertexArray(null);
 
   if (rightEdgeVAO) gl.deleteVertexArray(rightEdgeVAO);
@@ -467,9 +471,11 @@ function setupEdgeBuffers() {
   gl.bindVertexArray(rightEdgeVAO);
   rightEdgeVBO = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, rightEdgeVBO);
-  gl.bufferData(gl.ARRAY_BUFFER, MAX_TRACE_POINTS * 3 * 4, gl.DYNAMIC_DRAW);
-  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+  gl.bufferData(gl.ARRAY_BUFFER, MAX_TRACE_POINTS * 4 * 4, gl.DYNAMIC_DRAW);
+  gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 4*4, 0);
+  gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 4*4, 3*4);
   gl.enableVertexAttribArray(0);
+  gl.enableVertexAttribArray(1);
   gl.bindVertexArray(null);
 }
 
@@ -692,13 +698,13 @@ function drawScene(now) {
     //     gl.drawArrays(gl.TRIANGLE_STRIP, 0, subLayer.length * 2);
     //   }
     // }
+
     // Затем заливка текущего прохода
     if (currentPassPoints.length >= 2) {
       updateTapeAndEdges(currentPassPoints);
       gl.bindVertexArray(tapeVAO);
       mvp = glMatrix.mat4.multiply(glMatrix.mat4.create(), vpMatrix, modelMatrix);
       gl.uniformMatrix4fv(u_mvpMatrix, false, mvp);
-      gl.uniform1f(u_depthOffset, -0.001 * currentLayerSubLayers.length);
       gl.uniform3f(u_color, 0.9, 0.2, 0.1);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, currentPassPoints.length * 2);
     }
@@ -742,10 +748,10 @@ function drawScene(now) {
     //     }
     //   }
     // }
+  
     // Границы текущего прохода
     if (currentPassPoints.length >= 2) {
       updateTapeAndEdges(currentPassPoints);
-      gl.uniform1f(u_depthOffset, -0.001 * currentLayerSubLayers.length);
       if (leftEdgeCount > 0) {
         gl.bindVertexArray(leftEdgeVAO);
         gl.uniform3f(u_color, 0.0, 0.0, 0.0);
