@@ -171,8 +171,9 @@ function buildMandrelGeometry() {
       const next = curr + stepsAng;
       for (let j = 0; j < stepsAng; j++) {
         const jNext = (j + 1) % stepsAng;
-        idxs.push(curr + j, next + j, curr + jNext);
-        idxs.push(curr + jNext, next + j, next + jNext);
+        // обход против часовой стрелки при взгляде снаружи -> нормаль наружу
+        idxs.push(curr + j, curr + jNext, next + j);
+        idxs.push(curr + jNext, next + jNext, next + j);
       }
     }
   }
@@ -301,6 +302,23 @@ function forwardWorld(i) {  // функции превращают коорди�
 }
 
 
+// Синхронизация каретки с вращением оправки: ищет на траектории место,
+// где угол θ равен targetTheta (θ монотонно растёт вдоль пути).
+// Возвращает индекс последней точки с θ <= targetTheta и долю f ∈ [0,1]
+// до следующей точки (для плавного положения точки касания).
+function findPathPosition(targetTheta) {
+  let lo = 0, hi = numPoints - 1;
+  if (targetTheta <= pathPoints[0].theta) return { idx: 0, f: 0 };
+  if (targetTheta >= pathPoints[hi].theta) return { idx: hi, f: 0 };
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (pathPoints[mid].theta <= targetTheta) lo = mid; else hi = mid;
+  }
+  const t0 = pathPoints[lo].theta, t1 = pathPoints[hi].theta;
+  const f = t1 > t0 ? (targetTheta - t0) / (t1 - t0) : 0;
+  return { idx: lo, f };
+}
+
 function normalFromWorld(x, y, z) {  // нормаль к оправке
   const R = params.R;
   const L = params.L;
@@ -343,44 +361,58 @@ function updateTapeAndEdges(points) {
   const leftLine = [];
   const rightLine = [];
 
+  // Предыдущая корректная касательная и бинормаль – используются, если в
+  // текущей точке их нельзя вычислить (совпадающие точки, t || n)
+  let prevT = null;
+  let prevB = null;
+
   for (let i = 0; i < points.length; i++) {
     const P = points[i];
     const offset = -P[3] * 0.001;
     const normal = normalFromWorld(P[0], P[1], P[2]);
     const nx = normal[0], ny = normal[1], nz = normal[2];
     let tx, ty, tz;
-    if (i < points.length - 1) {
-      const next = points[i+1];
-      const dx = next[0] - P[0], dy = next[1] - P[1], dz = next[2] - P[2];
-      const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-      if (len > 1e-6) { tx = dx/len; ty = dy/len; tz = dz/len; }
-      else { tx = 1; ty = 0; tz = 0; }
+    const A = i < points.length - 1 ? P : points[i-1];
+    const B = i < points.length - 1 ? points[i+1] : P;
+    const dx = B[0] - A[0], dy = B[1] - A[1], dz = B[2] - A[2];
+    const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
+    if (len > 1e-6) {
+      tx = dx/len; ty = dy/len; tz = dz/len;
+      prevT = [tx, ty, tz];
+    } else if (prevT) {
+      [tx, ty, tz] = prevT;
     } else {
-      const prev = points[i-1];
-      const dx = P[0] - prev[0], dy = P[1] - prev[1], dz = P[2] - prev[2];
-      const len = Math.sqrt(dx*dx + dy*dy + dz*dz);
-      if (len > 1e-6) { tx = dx/len; ty = dy/len; tz = dz/len; }
-      else { tx = 1; ty = 0; tz = 0; }
+      tx = 1; ty = 0; tz = 0;
     }
 
-    const bx = ny*tz - nz*ty;
-    const by = nz*tx - nx*tz;
-    const bz = nx*ty - ny*tx;
+    let bx = ny*tz - nz*ty;
+    let by = nz*tx - nx*tz;
+    let bz = nx*ty - ny*tx;
     const lenB = Math.sqrt(bx*bx + by*by + bz*bz);
-    if (lenB < 1e-6) {
-      verts.push(P[0], P[1], P[2], P[0], P[1], P[2]);
-      leftLine.push(P[0], P[1], P[2]);
-      rightLine.push(P[0], P[1], P[2]);
+    if (lenB >= 1e-6) {
+      bx /= lenB; by /= lenB; bz /= lenB;
+      prevB = [bx, by, bz];
+    } else if (prevB) {
+      [bx, by, bz] = prevB;
+    } else {
+      // бинормаль не определена: вырожденная пара вершин. Шаг массива
+      // сохраняется – 4 float на вершину (x, y, z, offset)
+      verts.push(P[0], P[1], P[2], offset, P[0], P[1], P[2], offset);
+      leftLine.push(P[0], P[1], P[2], offset);
+      rightLine.push(P[0], P[1], P[2], offset);
       continue;
     }
-    const bnx = bx / lenB, bny = by / lenB, bnz = bz / lenB;
+    const bnx = bx, bny = by, bnz = bz;
     const leftX = P[0] - halfW * bnx;
     const leftY = P[1] - halfW * bny;
     const leftZ = P[2] - halfW * bnz;
     const rightX = P[0] + halfW * bnx;
     const rightY = P[1] + halfW * bny;
     const rightZ = P[2] + halfW * bnz;
-    verts.push(leftX, leftY, leftZ, offset, rightX, rightY, rightZ, offset);
+    // Порядок в полосе: правая, затем левая вершина. Тогда треугольник
+    // (R_i, L_i, R_{i+1}) имеет нормаль (L-R)x(R_{i+1}-R) ~ -b x t = +n,
+    // т.е. лицевая сторона ленты смотрит наружу от оправки
+    verts.push(rightX, rightY, rightZ, offset, leftX, leftY, leftZ, offset);
     leftLine.push(leftX, leftY, leftZ, offset);
     rightLine.push(rightX, rightY, rightZ, offset);
   }
@@ -476,8 +508,9 @@ function buildMarkerGeometry() { // создание геометрии каре
     for (let lon = 0; lon < lonBands; lon++) {
       const first = lat * (lonBands + 1) + lon;
       const second = first + lonBands + 1;
-      idxs.push(first, second, first + 1);
-      idxs.push(second, second + 1, first + 1);
+      // обход против часовой стрелки при взгляде снаружи -> нормаль наружу
+      idxs.push(first, first + 1, second);
+      idxs.push(second, first + 1, second + 1);
     }
   }
   markerCount = idxs.length;
@@ -571,7 +604,21 @@ function drawScene(now) {
   const viewMatrix = glMatrix.mat4.lookAt(glMatrix.mat4.create(), camPos, cameraTarget, [0, 1, 0]);
   const vpMatrix = glMatrix.mat4.multiply(glMatrix.mat4.create(), projMatrix, viewMatrix);
 
-  const mandrelAngle = -omega * animationTime;
+  // Синхронизация: оправка вращается с постоянной ω, за время tCycle от начала
+  // цикла она повернулась на ω·tCycle. Точка касания – точка траектории с
+  // θ = θ0 + ω·tCycle. Поворот оправки на -θ_касания переводит эту точку в
+  // направление на каретку (угол 0, ось +X).
+  const pathReady = numPoints > 1 && omega > 0.001;
+  let cycleTime = 0, tCycle = 0, cycleIndex = 0, targetTheta = 0;
+  if (pathReady) {
+    const theta0 = pathPoints[0].theta;
+    const thetaSpan = pathPoints[numPoints - 1].theta - theta0;
+    cycleTime = thetaSpan / omega;
+    tCycle = animationTime % cycleTime;
+    cycleIndex = Math.floor(animationTime / cycleTime);
+    targetTheta = theta0 + omega * tCycle;
+  }
+  const mandrelAngle = pathReady ? -targetTheta : -omega * animationTime;
   const modelMatrix = glMatrix.mat4.rotateZ(glMatrix.mat4.create(), glMatrix.mat4.create(), mandrelAngle);
 
   // отрисовка оправки 
@@ -583,15 +630,10 @@ function drawScene(now) {
   gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, mandrelIBO);
   gl.drawElements(gl.TRIANGLES, mandrelIndices.length, gl.UNSIGNED_SHORT, 0);
 
-  if (numPoints > 1 && omega > 0.001) {
-    const T_forward = totalTheta / omega;
-    const cycleTime = T_forward;
-    const tCycle = animationTime % cycleTime;
-    const cycleIndex = Math.floor(animationTime / cycleTime);
+  if (pathReady) {
+    const T_forward = cycleTime;
     const isForward = tCycle < T_forward;
     const currentPhaseOffset = cycleIndex * phiL; // фазовый сдвиг для текущего слоя, увеличивается на phiL при каждом новом слое
-    const phaseElapsed = isForward ? tCycle : (tCycle - T_forward);
-    const progress = Math.min(phaseElapsed / T_forward, 1.0);
 
     // // Проверка завершения слоя: фазовый сдвиг достиг кратного 2π
     // const twoPi = 2 * Math.PI;
@@ -630,13 +672,10 @@ function drawScene(now) {
     //   lastCarriageIdx = 0;
     // }
 
-    let currentIdx;
-    if (isForward) {
-      currentIdx = Math.floor(progress * (numPoints - 1));
-    } else {
-      currentIdx = Math.floor(progress * (numPoints - 1));
-    }
-    currentIdx = Math.min(Math.max(currentIdx, 0), numPoints - 1);
+    // Положение каретки определяется углом поворота оправки, а не равномерно
+    // по индексу точки (точки идут с постоянным шагом по z, а не по θ)
+    const pathPos = findPathPosition(targetTheta);
+    const currentIdx = pathPos.idx;
 
     // Добавление новых точек в текущий проход
     if (currentIdx !== lastCarriageIdx) {
@@ -748,7 +787,14 @@ function drawScene(now) {
 
     // ---- Каретка + линия связи ----
     if (currentIdx >= 0 && currentIdx < numPoints) {
-      const localTouch = getLocalPoint(currentIdx);
+      // Точка касания – интерполяция между соседними точками траектории
+      // в координатах поверхности (θ, z, r), чтобы точка не уходила под оправку
+      const pA = pathPoints[currentIdx];
+      const pB = pathPoints[Math.min(currentIdx + 1, numPoints - 1)];
+      const f = pathPos.f;
+      const th = pA.theta + (pB.theta - pA.theta) * f;
+      const rr = pA.r + (pB.r - pA.r) * f;
+      const localTouch = [rr * Math.cos(th), rr * Math.sin(th), pA.z + (pB.z - pA.z) * f];
       const worldTouch = glMatrix.vec3.transformMat4(
         glMatrix.vec3.create(),
         glMatrix.vec3.fromValues(localTouch[0], localTouch[1], localTouch[2]),
