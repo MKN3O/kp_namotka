@@ -264,7 +264,6 @@ function computeGeodesicPath() {
     back = true;
 
     // правое днище
-    theta += params.tapeWidth / (params.rn);
     z = L / 2 + domeH;
     calcBottom(z, L / 2, L / 2);
 
