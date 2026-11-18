@@ -218,78 +218,143 @@ function computeGeodesicPath() {
         }
     }
   }
-  const R = params.R;
-  const L = params.L;
-  const rn = params.rn;
-  const domeH = Math.sqrt(R * R - rn * rn);
-  const zStart = -L / 2 - domeH; // начальная точка намотки по z, L - длина цилиндра, domeH - 
-                                 // - высота полусферы (учтён вырез)
-  const zEnd = L / 2 + domeH;    // конечная точка
-  const c = params.rn;
-  const dz = 0.01;
-  let takt = 30;
+  // Доворот оправки на полюсе: каретка стоит, оправка поворачивается на dPhi,
+  // лента ложится по полюсной параллели r = c. Точки добавляются, чтобы
+  // полоса не соединяла полюс хордой, а θ оставалась монотонной.
+  function dwell(zPole, dPhi) {
+    if (dPhi <= 0) return;
+    const n = Math.max(1, Math.ceil(dPhi * c / dz));
+    for (let k = 1; k <= n; k++) {
+      pathPoints.push({ theta: theta + dPhi * k / n, z: zPole, r: c, takt });
+    }
+    theta += dPhi;
+  }
 
-  pathPoints = [];
-  let theta = 1;
-  let dtheta = 0;
-  let z = zStart;
-  let steps = 0;
-  let back = false;
-  beta0 = Math.asin(c / R);
-  const dthetadzCyl = Math.tan(beta0) / R;
-  const deltafstar = 2 * Math.PI;
-  while (theta % (2 * Math.PI) > 10e-3) {
+  // Один такт намотки (двойной ход каретки, полюс – полюс – полюс).
+  // dPhiPole – доворот на каждом полюсе (Δφ, ф. 10),
+  // dPhiTape – поворот на угловую ширину ленты в конце такта (Δφ_Л, ф. 11).
+  function windTakt(dPhiPole, dPhiTape) {
     // прямой ход
     back = false;
-    // Левое днище
-    theta += params.tapeWidth / (params.R * Math.cos(beta0));
-    z = zStart;
-    calcBottom(z, -L / 2, -L / 2);
-
-    // Цилиндр
-    z = -L / 2;
+    calcBottom(zStart, -L / 2, -L / 2);          // левое днище
+    let z = -L / 2;                               // цилиндр
     while (z < L / 2) {
       const dzPart = Math.min(dz, L / 2 - z);
       theta += dthetadzCyl * dzPart;
       pathPoints.push({ theta, z, r: R, takt });
       z += dzPart;
     }
-
-    // Правое днище
-    z = L / 2;
-    calcBottom(z, L / 2 + domeH, L / 2);
-    theta += params.tapeWidth / params.rn;
-    // обратный ход
+    calcBottom(L / 2, zEnd, L / 2);               // правое днище
+    dwell(zEnd, dPhiPole);                        // доворот на правом полюсе
     takt += 1;
+
+    // обратный ход
     back = true;
-
-    // правое днище
-    z = L / 2 + domeH;
-    calcBottom(z, L / 2, L / 2);
-
-    // цилиндр
-    z = L / 2;
+    calcBottom(zEnd, L / 2, L / 2);               // правое днище
+    z = L / 2;                                    // цилиндр
     while (z > -L / 2) {
-      const dzPart = dz;
+      const dzPart = Math.min(dz, z + L / 2);
       theta += dthetadzCyl * dzPart;
       pathPoints.push({ theta, z, r: R, takt });
       z -= dzPart;
     }
-
-    // левое днище
-    z = -L / 2;
-    calcBottom(z, -L / 2 - domeH, -L / 2);
-    theta += params.tapeWidth / (params.R * Math.cos(beta0));
+    calcBottom(-L / 2, zStart, -L / 2);           // левое днище
+    dwell(zStart, dPhiPole + dPhiTape);           // доворот на левом полюсе + Δφ_Л
     takt += 1;
+  }
+
+  const R = params.R;
+  const L = params.L;
+  const rn = params.rn;
+  const domeH = Math.sqrt(R * R - rn * rn);
+  const zStart = -L / 2 - domeH; // начальная точка намотки по z, L - длина цилиндра, domeH -
+                                 // - высота полусферы (учтён вырез)
+  const zEnd = L / 2 + domeH;    // конечная точка
+  const c = params.rn;
+  const dz = 0.01;
+  const twoPi = 2 * Math.PI;
+  let takt = 30;
+
+  let theta = 0;
+  let dtheta = 0;
+  let back = false;
+  beta0 = Math.asin(c / R);
+  const dthetadzCyl = Math.tan(beta0) / R;
+
+  // ---- Расчёт параметров намотки по методичке Ивченко ----
+  // (8) расчётный угол поворота оправки за такт φ_ТР = φ_Ц + 2φ_ДН.
+  // Берётся по той же численной траектории, что и рисуется, чтобы
+  // погрешность интегрирования на днищах не нарушала укладку встык.
+  pathPoints = [];
+  windTakt(0, 0);
+  const phiTR = theta;
+
+  // (9) расчётный угловой шаг φ_Р – остаток от целых оборотов
+  const phiP = phiTR - twoPi * Math.floor(phiTR / twoPi);
+
+  // (6) угловой шаг φ* – кратный угол, не меньший φ_Р:
+  // 60, 72, 90, 120, 180°, а при φ_Р > 180° – 240, 270, 288, 300, 360°.
+  // φ* = j·(2π/k): k – через сколько тактов начало витка возвращается
+  // (k·φ* ≡ 0 mod 2π).
+  const steps = [
+    { deg: 60, k: 6, j: 1 }, { deg: 72, k: 5, j: 1 }, { deg: 90, k: 4, j: 1 },
+    { deg: 120, k: 3, j: 1 }, { deg: 180, k: 2, j: 1 }, { deg: 240, k: 3, j: 2 },
+    { deg: 270, k: 4, j: 3 }, { deg: 288, k: 5, j: 4 }, { deg: 300, k: 6, j: 5 },
+    { deg: 360, k: 1, j: 1 },
+  ];
+
+  // (11) угловая ширина ленты Δφ_Л = t_Л / (R cos β_ц). Она должна
+  // укладываться в 2π/k целое число раз (m): Δφ_Л' = (2π/k) / m, m берётся с
+  // округлением вверх (лёгкое перекрытие вместо зазора). Дополнительно
+  // требуется НОД(j·m + 1, k) = 1 – иначе начала витков повторяются раньше,
+  // чем слой закроется, и остаются щели.
+  const dPhiTapeNominal = params.tapeWidth / (R * Math.cos(beta0));
+  const gcd = (a, b) => (b ? gcd(b, a % b) : a);
+  function tapeStepFor(s) {
+    const period = twoPi / s.k;
+    let m = Math.max(1, Math.ceil(period / dPhiTapeNominal - 1e-9));
+    while (gcd(s.j * m + 1, s.k) !== 1) m++;
+    return { ...s, m, dPhiTape: period / m };
+  }
+  // Берётся ближайший φ* ≥ φ_Р (наименьший доворот), при котором перекрытие
+  // соседних лент не превышает MAX_OVERLAP. Если такого нет – вариант
+  // с наименьшим перекрытием.
+  const MAX_OVERLAP = 0.05;
+  let step = null, best = null;
+  for (const s of steps) {
+    if (s.deg * Math.PI / 180 < phiP - 1e-9) continue;
+    const cand = tapeStepFor(s);
+    if (1 - cand.dPhiTape / dPhiTapeNominal <= MAX_OVERLAP) { step = cand; break; }
+    if (!best || cand.dPhiTape > best.dPhiTape + 1e-12) best = cand;
+  }
+  if (!step) step = best;
+  const phiStar = step.deg * Math.PI / 180;
+  const m = step.m;
+  const dPhiTape = step.dPhiTape;
+
+  // (10) доворот на каждом из фланцев
+  const dPhiPole = (phiStar - phiP) / 2;
+
+  // (15) число тактов для двойного спирального слоя
+  const T = step.k * m;                   // = 2π / Δφ_Л' (точно, без округления)
+
+  // ---- Построение траектории слоя ----
+  pathPoints = [];
+  theta = 0;
+  takt = 30;
+  for (let i = 0; i < T; i++) {
+    windTakt(dPhiPole, dPhiTape);
   }
   totalTheta = theta;
   numPoints = pathPoints.length;
+  phiL = dPhiTape;
 
-  if (Math.cos(beta0) > 0.001) {
-    phiL = params.tapeWidth / (params.R * Math.cos(beta0));
-  } else {
-    phiL = 0.2;
-  }
+  console.log(
+    `φ_ТР = ${(phiTR * 180 / Math.PI).toFixed(2)}°, φ_Р = ${(phiP * 180 / Math.PI).toFixed(2)}°, ` +
+    `φ* = ${step.deg}°, Δφ = ${(dPhiPole * 180 / Math.PI).toFixed(3)}°, ` +
+    `Δφ_Л = ${(dPhiTapeNominal * 180 / Math.PI).toFixed(3)}° → ${(dPhiTape * 180 / Math.PI).toFixed(3)}°, ` +
+    `T = ${T} тактов, точек: ${numPoints}`
+  );
 }
 
 // ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
