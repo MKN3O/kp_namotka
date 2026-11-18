@@ -186,26 +186,6 @@ function buildMandrelGeometry() {
 }
 
 
-function calcBottom(zStart, zEnd, L, R, c, dz) {
-  let z = zStart;
-  while (z < zEnd) {
-      const zc = zEnd;
-      const dzPart = Math.min(dz, -L / 2 - z); 
-      const r2 = R * R - (z - zc) * (z - zc);
-      if (r2 <= 0) break;
-      const r = Math.sqrt(r2);
-      const rp = -(z - zc) / r;
-      const denom = Math.sqrt(1 - c * c / (r * r));
-      if (denom < 1e-6 || isNaN(denom)) {theta += dtheta; pathPoints.push({ theta, z, r });  z += dzPart; continue;}
-      const sqrt1rp2 = Math.sqrt(1 + rp * rp);
-      const dthetadz = (c / (r * r)) * sqrt1rp2 / denom;
-      dtheta = dthetadz * dzPart;
-      theta += dtheta;
-      pathPoints.push({ theta, z, r });
-      z += dzPart;
-  }
-}
-
 // ==================== ГЕОДЕЗИЧЕСКАЯ ТРАЕКТОРИЯ ====================
 function computeGeodesicPath() {
   function calcBottom(zStart, zEnd, zc) {
@@ -246,7 +226,7 @@ function computeGeodesicPath() {
   const zEnd = L / 2 + domeH;    // конечная точка
   const c = params.rn;
   const dz = 0.01;
-  let takt = 0;
+  let takt = 30;
 
   pathPoints = [];
   let theta = 1;
@@ -412,12 +392,12 @@ function updateTapeAndEdges(points) {
   // Левый край
   gl.bindBuffer(gl.ARRAY_BUFFER, leftEdgeVBO);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(leftLine));
-  leftEdgeCount = leftLine.length / 3;
+  leftEdgeCount = leftLine.length / 4;
 
   // Правый край
   gl.bindBuffer(gl.ARRAY_BUFFER, rightEdgeVBO);
   gl.bufferSubData(gl.ARRAY_BUFFER, 0, new Float32Array(rightLine));
-  rightEdgeCount = rightLine.length / 3;
+  rightEdgeCount = rightLine.length / 4;
 }
 
 // ==================== БУФЕРЫ ====================
