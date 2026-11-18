@@ -1,4 +1,5 @@
 #version 300 es
+// больше самого сдвига, что дало бы z-fighting
 precision highp float;
 uniform vec3 u_Color;
 in float v_depthOffset;
@@ -6,12 +7,13 @@ out vec4 fragColor;
 
 void main() {
   fragColor = vec4(u_Color, 1.0);
+  float d = 0.0;
   if (gl_FrontFacing) {
     fragColor.rgb *= 1.0; // Цвет для лицевой стороны. Добавлено для теста
-    float d = -v_depthOffset;
+    d = -v_depthOffset;
   } else {
     fragColor.rgb *= 0.5;
-    float d = v_depthOffset;
+    d = v_depthOffset;
   }
 
   // Лицевые фрагменты приближаем к камере, нелицевые – отдаляем.
